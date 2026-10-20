@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'workbench/workbench_controller.dart';
+import 'workbench/workbench_screen.dart';
+
 /// Root widget for FetchRen.
 class FetchRenApp extends StatelessWidget {
-  const FetchRenApp({super.key});
+  const FetchRenApp({super.key, required this.controller});
+
+  final WorkbenchController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -18,32 +23,7 @@ class FetchRenApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const HomeScreen(),
-    );
-  }
-}
-
-/// Placeholder home screen until API-client features are implemented.
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('FetchRen', style: textTheme.displaySmall),
-            const SizedBox(height: 8),
-            Text(
-              'Open-source, cross-platform API client',
-              style: textTheme.titleMedium,
-            ),
-          ],
-        ),
-      ),
+      home: WorkbenchScreen(controller: controller),
     );
   }
 }
