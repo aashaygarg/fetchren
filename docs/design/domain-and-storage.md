@@ -140,7 +140,10 @@ CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 - Connection settings: WAL, `synchronous = FULL`, `foreign_keys = ON`.
 - Each repository holds two connections. A writer runs transactions as
   `BEGIN IMMEDIATE`; a reader serves committed data outside transactions.
-- `busy_timeout` is 5 s during open and schema migration. Runtime writers
+- `busy_timeout` is 5 s during open and schema migration. Switching a new
+  file to WAL can return `SQLITE_BUSY` without consulting `busy_timeout`
+  while another process creates the same file, so that step is retried
+  within the same 5 s. Runtime writers
   retry `SQLITE_BUSY` asynchronously for up to 5 s, so another process's lock
   never blocks the UI isolate.
 - Structural rules (versions, parent integrity, cycles, tombstones) come from

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:sqlite3/sqlite3.dart';
 
 /// A forward-only schema step. [version] is the `user_version` after it runs.
@@ -102,7 +104,22 @@ void configureConnection(Database db, {required Duration busyTimeout}) {
   db.execute('PRAGMA busy_timeout = ${busyTimeout.inMilliseconds}');
   db.execute('PRAGMA foreign_keys = ON');
   // WAL lets readers see the last committed state while a write is open.
-  db.execute('PRAGMA journal_mode = WAL');
+  // While another process is creating the same file, the switch can fail
+  // with SQLITE_BUSY without consulting busy_timeout, so it is retried here
+  // within the same limit.
+  final deadline = DateTime.now().add(busyTimeout);
+  while (true) {
+    try {
+      db.execute('PRAGMA journal_mode = WAL');
+      break;
+    } on SqliteException catch (e) {
+      if (e.resultCode != SqlError.SQLITE_BUSY ||
+          !DateTime.now().isBefore(deadline)) {
+        rethrow;
+      }
+      sleep(const Duration(milliseconds: 10));
+    }
+  }
   db.execute('PRAGMA synchronous = FULL');
 }
 

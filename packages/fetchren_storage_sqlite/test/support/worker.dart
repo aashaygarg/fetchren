@@ -30,6 +30,10 @@ Future<void> main(List<String> args) async {
 
     case ['open', final dir]:
       final local = await openLocalWorkspace(dir);
+      if (!local.isPersistent) {
+        stderr.writeln('not persistent: ${local.openError}');
+        exit(3);
+      }
       stdout.writeln(local.migration.outcome.name);
       await local.close();
 

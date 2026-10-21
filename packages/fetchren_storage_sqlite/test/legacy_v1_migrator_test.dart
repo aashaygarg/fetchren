@@ -486,6 +486,21 @@ void main() {
       expect(archived(), hasLength(1));
     }, timeout: const Timeout(Duration(minutes: 2)));
 
+    // Regression: switching a new file to WAL can fail with SQLITE_BUSY
+    // without consulting busy_timeout, so the app fell back to in-memory.
+    test('concurrent first opens of a new database all persist', () async {
+      for (var round = 0; round < 10; round++) {
+        final fresh = await dir.createTemp('round');
+        final results = await Future.wait([
+          for (var i = 0; i < 6; i++) worker(['open', fresh.path]),
+        ]);
+        for (final r in results) {
+          expect(r.exitCode, 0, reason: 'round $round: ${r.stderr}');
+          expect('${r.stdout}'.trim(), 'notNeeded');
+        }
+      }
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
     test('a process killed mid-transaction commits nothing', () async {
       final result = await worker(['crash-mid-transaction', dir.path]);
       expect(result.exitCode, 9, reason: '${result.stderr}');
