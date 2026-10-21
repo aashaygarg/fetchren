@@ -287,6 +287,33 @@ void main() {
   });
 
   group('interruption at each stage (in-process)', () {
+    // Regression (Windows CI): B read "no marker", then A completed and renamed
+    // the file, and B reported notNeeded.
+    test(
+      'an instance that finds the file already archived reports completion',
+      () async {
+        await writeLegacy([legacyJson('a'), legacyJson('b')]);
+        LocalWorkspace? first;
+        final second = await open(
+          onStage: (stage) async {
+            if (stage == MigrationStage.markerRead && first == null) {
+              first = await open();
+            }
+          },
+        );
+        addTearDown(() async {
+          await first?.close();
+          await second.close();
+        });
+
+        expect(first!.migration.outcome, LegacyMigrationOutcome.completed);
+        expect(second.migration.outcome, LegacyMigrationOutcome.completed);
+        expect(second.migration.marker!.state, LegacyMigrationState.completed);
+        expect(await requestsIn(second), hasLength(2));
+        expect(archived(), hasLength(1));
+      },
+    );
+
     test(
       'an instance overtaken by another never downgrades completion',
       () async {

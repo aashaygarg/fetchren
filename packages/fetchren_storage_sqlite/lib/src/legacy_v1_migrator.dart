@@ -94,7 +94,12 @@ class LegacyMigrationResult {
 }
 
 /// Stages at which tests can simulate a crash.
-enum MigrationStage { markedInProgress, recordsWrittenBeforeCommit, committed }
+enum MigrationStage {
+  markerRead,
+  markedInProgress,
+  recordsWrittenBeforeCommit,
+  committed,
+}
 
 /// Imports the schema-v1 `requests.json` into [target], at most once.
 ///
@@ -117,18 +122,24 @@ Future<LegacyMigrationResult> migrateLegacyV1({
 }) async {
   final source = File(legacyPath);
   final previous = await _readMarker(repository);
+  await onStage?.call(MigrationStage.markerRead);
   if (previous?.state == LegacyMigrationState.completed) {
     return _completed(repository, source, clock);
   }
 
   if (!await source.exists()) {
-    if (previous == null) {
+    // Another instance may have completed and renamed the file since our
+    // first read; the marker is committed before the rename, so re-read it.
+    final current = await _readMarker(repository);
+    if (current?.state == LegacyMigrationState.completed) {
+      return _completed(repository, source, clock);
+    }
+    if (current == null) {
       return const LegacyMigrationResult(LegacyMigrationOutcome.notNeeded);
     }
     final marker = await _transition(
       repository,
-      (current) =>
-          _next(current ?? previous, LegacyMigrationState.skipped, clock),
+      (latest) => _next(latest ?? current, LegacyMigrationState.skipped, clock),
     );
     if (marker.state == LegacyMigrationState.completed) {
       return _completed(repository, source, clock);
