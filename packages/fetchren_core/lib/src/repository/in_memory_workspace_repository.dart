@@ -24,7 +24,15 @@ class InMemoryWorkspaceRepository implements WorkspaceRepository {
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
-  }) async => _children(_committed, parentId, includeDeleted);
+    int? limit,
+  }) async => _children(_committed, parentId, includeDeleted, limit);
+
+  @override
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  }) async => _summaries(_committed, parentId, limit, after);
 
   @override
   Future<T> transaction<T>(Future<T> Function(WorkspaceWriter tx) action) {
@@ -75,9 +83,20 @@ class _InMemoryWriter implements WorkspaceWriter {
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
+    int? limit,
   }) async {
     _checkOpen();
-    return _children(_working, parentId, includeDeleted);
+    return _children(_working, parentId, includeDeleted, limit);
+  }
+
+  @override
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  }) async {
+    _checkOpen();
+    return _summaries(_working, parentId, limit, after);
   }
 
   @override
@@ -95,7 +114,7 @@ class _InMemoryWriter implements WorkspaceWriter {
     final tombstones = await tombstonesFor(
       root,
       at,
-      (parentId) async => _children(_working, parentId, false),
+      (parentId) async => _children(_working, parentId, false, null),
     );
     for (final entity in tombstones) {
       _working[entity.id] = entity;
@@ -121,7 +140,29 @@ List<WorkspaceEntity> _children(
   Map<String, WorkspaceEntity> entities,
   String parentId,
   bool includeDeleted,
-) => [
-  for (final e in entities.values)
-    if (e.parentId == parentId && (includeDeleted || !e.meta.isDeleted)) e,
-]..sort(_bySortKey);
+  int? limit,
+) {
+  checkLimit(limit);
+  final all = [
+    for (final e in entities.values)
+      if (e.parentId == parentId && (includeDeleted || !e.meta.isDeleted)) e,
+  ]..sort(_bySortKey);
+  return limit == null ? all : all.take(limit).toList();
+}
+
+List<RequestSummary> _summaries(
+  Map<String, WorkspaceEntity> entities,
+  String parentId,
+  int limit,
+  RequestSummary? after,
+) {
+  checkLimit(limit);
+  final page = [
+    for (final e in entities.values)
+      if (e is RequestItem && e.parentId == parentId && !e.meta.isDeleted)
+        if (RequestSummary.of(e) case final s
+            when after == null || compareNewestFirst(after, s) < 0)
+          s,
+  ]..sort(compareNewestFirst);
+  return page.take(limit).toList();
+}

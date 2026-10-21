@@ -51,6 +51,44 @@ void main() {
     expect(find.text('No saved requests'), findsOneWidget);
   });
 
+  testWidgets('scrolling to the end of the list loads the next page', (
+    tester,
+  ) async {
+    const total = WorkbenchController.pageSize + 20;
+    final controller = await pumpWorkbench(
+      tester,
+      seed: [
+        for (var i = 0; i < total; i++)
+          (c) => makeItem(
+            c,
+            id: 'r$i',
+            url: 'https://item-$i.test',
+            method: i == total - 1 ? HttpMethod.patch : HttpMethod.get,
+            updatedAt: fixedTime.subtract(Duration(minutes: i)),
+          ),
+      ],
+    );
+    expect(controller.savedRequests, hasLength(WorkbenchController.pageSize));
+    final last = find.byKey(const ValueKey('saved-r${total - 1}'));
+    await tester.scrollUntilVisible(
+      last,
+      300,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    expect(controller.savedRequests, hasLength(total));
+    expect(controller.hasMoreSaved, isFalse);
+    expect(
+      find.descendant(of: last, matching: find.text('PATCH')),
+      findsOneWidget,
+    );
+  });
+
   // Regression: opening a request as the first action after launch left the
   // URL field empty (found by the macOS integration test).
   testWidgets(

@@ -43,8 +43,13 @@ void main() {
 
         local = await openLocalWorkspace(dir.path);
         final stored = await local.repository.get('smoke');
+        final summaries = await local.repository.requestSummaries(
+          c.id,
+          limit: 10,
+        );
         await local.close();
         expect((stored! as RequestItem).template.url, 'https://smoke.test');
+        expect(summaries.single, RequestSummary.of(stored as RequestItem));
         // ignore: avoid_print
         print(
           'SQLITE_SMOKE ok on ${Platform.operatingSystem} '

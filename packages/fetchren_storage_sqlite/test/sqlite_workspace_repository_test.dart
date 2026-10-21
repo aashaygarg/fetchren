@@ -38,6 +38,33 @@ void main() {
       expect(db.select('PRAGMA journal_mode').single.values.single, 'wal');
     });
 
+    test('upgrades a version 1 database with the request-list index', () async {
+      final v1 = openWorkspaceDatabase(
+        path,
+        migrations: workspaceMigrations.take(1).toList(),
+      );
+      v1.execute(
+        "INSERT INTO nodes (id, kind, workspace_id, name, sort_key, version, "
+        "created_at, updated_at) VALUES ('w', 'workspace', 'w', 'W', 'i', 1, "
+        '0, 0)',
+      );
+      expect(v1.userVersion, 1);
+      v1.close();
+
+      final repo = SqliteWorkspaceRepository.open(path);
+      addTearDown(repo.close);
+      expect((await repo.get('w'))!.name, 'W');
+      final db = sqlite3.open(path);
+      addTearDown(db.close);
+      expect(db.userVersion, 2);
+      expect(
+        db.select(
+          "SELECT 1 FROM sqlite_master WHERE name = 'nodes_request_list'",
+        ),
+        hasLength(1),
+      );
+    });
+
     test('upgrades an older database and keeps its data', () async {
       final repo = SqliteWorkspaceRepository.open(path);
       await seed(repo);
@@ -133,6 +160,24 @@ void main() {
         ),
         allOf(contains('nodes_workspaces'), isNot(contains('TEMP B-TREE'))),
       );
+      const summaries =
+          'SELECT n.id, n.name, n.updated_at, t.method '
+          'FROM nodes n JOIN request_templates t ON t.request_id = n.id '
+          "WHERE n.parent_id = ? AND n.kind = 'request' "
+          'AND n.deleted_at IS NULL ';
+      const order = ' ORDER BY n.updated_at DESC, n.id LIMIT ?';
+      for (final sql in [
+        '$summaries$order',
+        '$summaries AND (n.updated_at < ? OR (n.updated_at = ? AND n.id > ?))'
+            '$order',
+      ]) {
+        final args = ['c', ...List.filled('?'.allMatches(sql).length - 1, 1)];
+        expect(
+          plan(sql, args),
+          allOf(contains('nodes_request_list'), isNot(contains('TEMP B-TREE'))),
+          reason: sql,
+        );
+      }
     });
   });
 

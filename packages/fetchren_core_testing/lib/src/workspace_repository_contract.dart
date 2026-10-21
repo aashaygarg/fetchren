@@ -89,6 +89,135 @@ void runWorkspaceRepositoryContract(
       );
     });
 
+    group('bounded reads', () {
+      RequestItem request(
+        String id,
+        DateTime updatedAt, {
+        Folder? folder,
+        HttpMethod method = HttpMethod.get,
+      }) {
+        final r = tree.request(collection, folder: folder, id: id);
+        return r.copyWith(
+          meta: EntityMeta.create(now: updatedAt, sortKey: 'i', id: id),
+          name: 'Name $id',
+          template: r.template.copyWith(
+            method: method,
+            headers: const [HeaderEntry(id: 'h', name: 'X-A', value: '1')],
+            body: 'body of $id',
+          ),
+        );
+      }
+
+      Future<List<String>> ids({required int limit, RequestSummary? after}) =>
+          repo
+              .requestSummaries('c', limit: limit, after: after)
+              .then((page) => [for (final s in page) s.id]);
+
+      test('children honours a limit in sort-key order', () async {
+        for (final (id, key) in [('a', 'm'), ('b', 'b'), ('c1', 'z')]) {
+          await put(tree.request(collection, id: id, sortKey: key));
+        }
+        expect((await repo.children('c', limit: 2)).map((e) => e.id), [
+          'b',
+          'a',
+        ]);
+        expect(await repo.children('c', limit: 10), hasLength(3));
+      });
+
+      test('summaries list live requests newest first, ties by ID', () async {
+        final folder = tree.folder(collection, id: 'f');
+        await put(folder);
+        await put(request('old', t0));
+        await put(request('new', later, method: HttpMethod.post));
+        await put(request('tie-b', t0.add(const Duration(minutes: 1))));
+        await put(request('tie-a', t0.add(const Duration(minutes: 1))));
+        await put(request('nested', later, folder: folder));
+        await put(request('gone', later));
+        await repo.transaction((tx) => tx.softDelete('gone', later));
+
+        final page = await repo.requestSummaries('c', limit: 10);
+        expect(page.map((s) => s.id), ['new', 'tie-a', 'tie-b', 'old']);
+        expect(
+          page.first,
+          RequestSummary(
+            id: 'new',
+            name: 'Name new',
+            method: HttpMethod.post,
+            updatedAt: later,
+          ),
+        );
+        expect(page.first.updatedAt.isUtc, isTrue);
+        expect((await repo.requestSummaries('f', limit: 10)).map((s) => s.id), [
+          'nested',
+        ], reason: 'requests in folders belong to the folder');
+        expect(await repo.requestSummaries('missing', limit: 10), isEmpty);
+      });
+
+      test('summaries match the full requests they describe', () async {
+        await put(request('r', later, method: HttpMethod.delete));
+        final summary = (await repo.requestSummaries('c', limit: 1)).single;
+        expect(
+          summary,
+          RequestSummary.of((await repo.get('r'))! as RequestItem),
+        );
+      });
+
+      test('pages cover every request exactly once, in order', () async {
+        await repo.transaction((tx) async {
+          for (var i = 0; i < 25; i++) {
+            // Pairs share a timestamp so pages split ties.
+            final id = 'r${i.toString().padLeft(2, '0')}';
+            await tx.put(request(id, t0.add(Duration(minutes: i ~/ 2))));
+          }
+        });
+        final all = await repo.requestSummaries('c', limit: 100);
+        expect(all, hasLength(25));
+        final paged = <String>[];
+        RequestSummary? after;
+        while (true) {
+          final page = await repo.requestSummaries('c', limit: 4, after: after);
+          paged.addAll(page.map((s) => s.id));
+          if (page.length < 4) break;
+          after = page.last;
+        }
+        expect(paged, all.map((s) => s.id));
+        expect(paged.toSet(), hasLength(25));
+      });
+
+      test('paging continues after a request that was deleted', () async {
+        await put(request('a', later));
+        await put(request('b', t0.add(const Duration(minutes: 30))));
+        await put(request('c1', t0));
+        final first = await repo.requestSummaries('c', limit: 1);
+        await repo.transaction((tx) => tx.softDelete('a', later));
+        expect(await ids(limit: 5, after: first.single), ['b', 'c1']);
+        expect(await ids(limit: 5), ['b', 'c1']);
+      });
+
+      test('reads inside a transaction see its own writes', () async {
+        await repo.transaction((tx) async {
+          await tx.put(request('r', later));
+          expect((await tx.requestSummaries('c', limit: 5)).map((s) => s.id), [
+            'r',
+          ]);
+          expect((await tx.children('c', limit: 1)).single.id, 'r');
+          expect(await repo.requestSummaries('c', limit: 5), isEmpty);
+        });
+      });
+
+      test('limits below 1 are rejected', () async {
+        await expectLater(repo.children('c', limit: 0), throwsRangeError);
+        await expectLater(
+          repo.requestSummaries('c', limit: 0),
+          throwsRangeError,
+        );
+        await expectLater(
+          repo.transaction((tx) => tx.requestSummaries('c', limit: -1)),
+          throwsRangeError,
+        );
+      });
+    });
+
     group('versioning', () {
       test('updates require exactly the next version', () async {
         final r = tree.request(collection, id: 'r');

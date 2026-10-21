@@ -60,9 +60,20 @@ class SqliteWorkspaceRepository implements WorkspaceRepository {
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
+    int? limit,
   }) async {
     _checkOpen();
-    return _children(_reader, parentId, includeDeleted);
+    return _children(_reader, parentId, includeDeleted, limit);
+  }
+
+  @override
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  }) async {
+    _checkOpen();
+    return _summaries(_reader, parentId, limit, after);
   }
 
   @override
@@ -161,9 +172,20 @@ class SqliteWorkspaceWriter implements WorkspaceWriter {
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
+    int? limit,
   }) async {
     _checkOpen();
-    return _children(_db, parentId, includeDeleted);
+    return _children(_db, parentId, includeDeleted, limit);
+  }
+
+  @override
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  }) async {
+    _checkOpen();
+    return _summaries(_db, parentId, limit, after);
   }
 
   @override
@@ -181,7 +203,7 @@ class SqliteWorkspaceWriter implements WorkspaceWriter {
     final tombstones = await tombstonesFor(
       root,
       at,
-      (parentId) async => _children(_db, parentId, false),
+      (parentId) async => _children(_db, parentId, false, null),
     );
     for (final entity in tombstones) {
       _upsert(_db, entity);
@@ -229,15 +251,53 @@ List<WorkspaceEntity> _children(
   Database db,
   String parentId,
   bool includeDeleted,
-) => [
-  for (final row in db.select(
-    '$_select WHERE n.parent_id = ?'
-    '${includeDeleted ? '' : ' AND n.deleted_at IS NULL'}'
-    ' ORDER BY n.sort_key, n.id',
-    [parentId],
-  ))
-    _fromRow(row),
-];
+  int? limit,
+) {
+  checkLimit(limit);
+  return [
+    for (final row in db.select(
+      '$_select WHERE n.parent_id = ?'
+      '${includeDeleted ? '' : ' AND n.deleted_at IS NULL'}'
+      ' ORDER BY n.sort_key, n.id'
+      '${limit == null ? '' : ' LIMIT ?'}',
+      [parentId, ?limit],
+    ))
+      _fromRow(row),
+  ];
+}
+
+List<RequestSummary> _summaries(
+  Database db,
+  String parentId,
+  int limit,
+  RequestSummary? after,
+) {
+  checkLimit(limit);
+  final updated = after?.updatedAt.microsecondsSinceEpoch;
+  return [
+    for (final row in db.select(
+      '''
+      SELECT n.id, n.name, n.updated_at, t.method
+      FROM nodes n JOIN request_templates t ON t.request_id = n.id
+      WHERE n.parent_id = ? AND n.kind = 'request' AND n.deleted_at IS NULL
+      ${after == null ? '' : 'AND (n.updated_at < ? OR (n.updated_at = ? AND n.id > ?))'}
+      ORDER BY n.updated_at DESC, n.id
+      LIMIT ?
+      ''',
+      [
+        parentId,
+        if (after != null) ...[updated, updated, after.id],
+        limit,
+      ],
+    ))
+      RequestSummary(
+        id: row['id'] as String,
+        name: row['name'] as String,
+        method: HttpMethod.fromWireName(row['method'] as String),
+        updatedAt: _time(row['updated_at'] as int),
+      ),
+  ];
+}
 
 String? _readMeta(Database db, String key) {
   final rows = db.select('SELECT value FROM app_meta WHERE key = ?', [key]);

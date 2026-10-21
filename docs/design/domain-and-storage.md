@@ -99,7 +99,7 @@ Build-time notes:
   `.dart_tool/lib/libsqlite3.dylib`. Multi-process tests therefore build a
   worker once with `dart build cli`.
 
-### Schema (version 1, `PRAGMA user_version = 1`)
+### Schema (version 2, `PRAGMA user_version = 2`)
 
 ```sql
 CREATE TABLE nodes (
@@ -117,6 +117,9 @@ CREATE TABLE nodes (
 ) STRICT;
 CREATE INDEX nodes_children ON nodes (parent_id, sort_key, id);
 CREATE INDEX nodes_workspaces ON nodes (sort_key, id) WHERE kind = 'workspace';
+-- Added in version 2 for requestSummaries().
+CREATE INDEX nodes_request_list ON nodes (parent_id, updated_at DESC, id)
+  WHERE kind = 'request' AND deleted_at IS NULL;
 
 CREATE TABLE request_templates (
   request_id TEXT PRIMARY KEY REFERENCES nodes(id),
@@ -131,9 +134,9 @@ CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 - `user_version` numbers the **database** schema, independently of the v1
   JSON file format. The 005A plan proposed starting at 2; that was dropped as
   a needless coupling.
-- Indexes match the only two queries in the repository: `children(parentId)`
-  and `workspaces()`. A test checks with `EXPLAIN QUERY PLAN` that both use
-  their index without a temporary sort.
+- Indexes match the repository's queries: `children(parentId)`,
+  `workspaces()`, and `requestSummaries(parentId)`. A test checks with
+  `EXPLAIN QUERY PLAN` that each uses its index without a temporary sort.
 - Connection settings: WAL, `synchronous = FULL`, `foreign_keys = ON`.
 - Each repository holds two connections. A writer runs transactions as
   `BEGIN IMMEDIATE`; a reader serves committed data outside transactions.
@@ -158,6 +161,34 @@ CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
   modified, and the app runs non-persistently with a visible message.
 - **Not a database:** `SqliteException`, handled the same way. The file is
   never overwritten or "repaired".
+- **Version 2** only adds `nodes_request_list`. A build that supports only
+  version 1 refuses a version 2 file with the "newer FetchRen" message.
+
+### Loading the request list
+
+The sidebar reads `requestSummaries(collectionId, limit: 100, after: last)`:
+ID, name, method, and `updatedAt` only, never headers or bodies. Pages are
+keyset-based on `(updated_at DESC, id)`, the same newest-first order the
+list always used, so a page boundary is stable while requests are added or
+deleted. The next page is read when the last loaded row is built. The full
+request is read with `get(id)` when it is opened. New requests take a sort
+key before `children(collectionId, limit: 1)`.
+
+Median milliseconds, macOS 27 arm64, AOT, `tool/benchmark.dart`,
+20 runs. Each request has three headers and a 1 KB body:
+
+- **Full list (`children`, as before this change):** 0.49 / 3.55 / 57.0 /
+  279 ms for 100 / 1,000 / 10,000 / 50,000 requests.
+- **First page of 100 summaries:** 0.08 / 0.07 / 0.08 / 0.07 ms.
+- **A page from the middle of the list:** 0.06 / 0.09 / 0.21 / 0.95 ms.
+- **Same first page without `nodes_request_list`:** 0.10 / 0.27 / 2.54 /
+  15.1 ms; it sorts the whole collection, which is why version 2 adds it.
+- **Front sort key (`children(limit: 1)`):** 0.02 ms at every size.
+- Saving, updating, and deleting stay at 0.1–0.3 ms; seeding 50,000
+  requests in one transaction costs about 1% more with the extra index.
+
+The UI isolate therefore never runs a list query longer than about 1 ms at
+50,000 requests, so SQLite stays on the UI isolate.
 
 ## 4. Migrating `requests.json` (schema-v1 file)
 
@@ -247,4 +278,5 @@ imports it again.
 6. **v1 import policy:** all-or-nothing (current) vs importing valid entries
    and reporting the rest.
 7. **Background isolate:** SQLite calls are synchronous on the UI isolate.
-   This is fine at current sizes; revisit with history and large collections.
+   List reads are paged and stay near 1 ms at 50,000 requests (see Loading
+   the request list); revisit with history or full-text search.

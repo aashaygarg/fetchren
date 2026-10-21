@@ -23,9 +23,20 @@ class UnsupportedSchemaVersionException implements Exception {
 
 const List<SchemaMigration> workspaceMigrations = [
   SchemaMigration(1, _createV1),
+  SchemaMigration(2, _addRequestListIndex),
 ];
 
 int get latestSchemaVersion => workspaceMigrations.last.version;
+
+// requestSummaries: live requests under a parent, newest first, read a page
+// at a time without sorting the whole collection.
+void _addRequestListIndex(Database db) {
+  db.execute('''
+    CREATE INDEX nodes_request_list
+      ON nodes (parent_id, updated_at DESC, id)
+      WHERE kind = 'request' AND deleted_at IS NULL
+  ''');
+}
 
 void _createV1(Database db) {
   db.execute('''

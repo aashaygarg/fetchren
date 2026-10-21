@@ -7,6 +7,8 @@ import 'package:fetchren_core/fetchren_core.dart';
 import 'package:fetchren_storage_sqlite/fetchren_storage_sqlite.dart';
 
 const int _runs = 20;
+// Matches WorkbenchController.pageSize.
+const int _page = 100;
 final DateTime _now = DateTime.utc(2026, 10, 21);
 
 Future<void> main(List<String> args) async {
@@ -33,7 +35,7 @@ Future<void> _benchmark(String dir, int size) async {
   final seed = Stopwatch()..start();
   await local.repository.transaction((tx) async {
     for (var i = 0; i < size; i++) {
-      await tx.put(_request(c, 'seed-$i'));
+      await tx.put(_request(c, 'seed-$i', ageSeconds: i));
     }
   });
   stdout.writeln(
@@ -51,6 +53,16 @@ Future<void> _benchmark(String dir, int size) async {
   final repo = local.repository;
   await _time('children(collection)  [load list]', size, () async {
     await repo.children(c.id);
+  });
+  await _time('requestSummaries first page ($_page)', size, () async {
+    await repo.requestSummaries(c.id, limit: _page);
+  });
+  final middle = (await repo.requestSummaries(c.id, limit: size ~/ 2)).last;
+  await _time('requestSummaries page after middle ($_page)', size, () async {
+    await repo.requestSummaries(c.id, limit: _page, after: middle);
+  });
+  await _time('children(collection, limit: 1)  [front key]', size, () async {
+    await repo.children(c.id, limit: 1);
   });
   await _time('get(id)', size, () async {
     await repo.get('seed-${size ~/ 2}');
@@ -88,22 +100,27 @@ Future<void> _time(String label, int size, Future<void> Function() op) async {
   );
 }
 
-RequestItem _request(Collection c, String id) => RequestItem(
-  meta: EntityMeta.create(now: _now, sortKey: 'i', id: id),
-  workspaceId: c.workspaceId,
-  collectionId: c.id,
-  name: 'https://api.example.test/v1/resources/$id?page=1&limit=50',
-  template: RequestTemplate(
-    method: HttpMethod.post,
-    url: 'https://api.example.test/v1/resources/$id?page=1&limit=50',
-    headers: [
-      for (final (name, value) in [
-        ('Accept', 'application/json'),
-        ('Content-Type', 'application/json'),
-        ('X-Request-Id', id),
-      ])
-        HeaderEntry(id: '$id-$name', name: name, value: value),
-    ],
-    body: '{"payload":"${'x' * 1000}"}',
-  ),
-);
+RequestItem _request(Collection c, String id, {int ageSeconds = 0}) =>
+    RequestItem(
+      meta: EntityMeta.create(
+        now: _now.subtract(Duration(seconds: ageSeconds)),
+        sortKey: 'i',
+        id: id,
+      ),
+      workspaceId: c.workspaceId,
+      collectionId: c.id,
+      name: 'https://api.example.test/v1/resources/$id?page=1&limit=50',
+      template: RequestTemplate(
+        method: HttpMethod.post,
+        url: 'https://api.example.test/v1/resources/$id?page=1&limit=50',
+        headers: [
+          for (final (name, value) in [
+            ('Accept', 'application/json'),
+            ('Content-Type', 'application/json'),
+            ('X-Request-Id', id),
+          ])
+            HeaderEntry(id: '$id-$name', name: name, value: value),
+        ],
+        body: '{"payload":"${'x' * 1000}"}',
+      ),
+    );

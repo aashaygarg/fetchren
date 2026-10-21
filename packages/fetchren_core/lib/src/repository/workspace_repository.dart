@@ -1,4 +1,50 @@
 import '../domain/workspace_entities.dart';
+import '../models/http_method.dart';
+
+/// What a request list shows, without the request's headers or body.
+final class RequestSummary {
+  const RequestSummary({
+    required this.id,
+    required this.name,
+    required this.method,
+    required this.updatedAt,
+  });
+
+  RequestSummary.of(RequestItem request)
+    : this(
+        id: request.id,
+        name: request.name,
+        method: request.template.method,
+        updatedAt: request.meta.updatedAt,
+      );
+
+  final String id;
+  final String name;
+  final HttpMethod method;
+
+  /// UTC.
+  final DateTime updatedAt;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RequestSummary &&
+      other.id == id &&
+      other.name == name &&
+      other.method == method &&
+      other.updatedAt == updatedAt;
+
+  @override
+  int get hashCode => Object.hash(id, name, method, updatedAt);
+
+  @override
+  String toString() => 'RequestSummary($id, ${method.wireName}, $name)';
+}
+
+/// Orders summaries most recently updated first, then by ID.
+int compareNewestFirst(RequestSummary a, RequestSummary b) {
+  final byUpdated = b.updatedAt.compareTo(a.updatedAt);
+  return byUpdated != 0 ? byUpdated : a.id.compareTo(b.id);
+}
 
 /// Read access to workspace records.
 abstract interface class WorkspaceReader {
@@ -11,11 +57,31 @@ abstract interface class WorkspaceReader {
   /// Direct children of [parentId], ordered by sort key then ID.
   ///
   /// Children of a workspace are collections; children of a collection or
-  /// folder are folders and requests, interleaved by sort key.
+  /// folders are folders and requests, interleaved by sort key. Returns at
+  /// most [limit] entities when given; [limit] must be at least 1.
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
+    int? limit,
   });
+
+  /// Live requests directly under [parentId], ordered by
+  /// [compareNewestFirst], at most [limit] of them (at least 1).
+  ///
+  /// Pass the last summary of a page as [after] to read the next page; it
+  /// need not still exist.
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  });
+}
+
+/// Throws [RangeError] unless [limit] is null or at least 1.
+void checkLimit(int? limit) {
+  if (limit != null && limit < 1) {
+    throw RangeError.range(limit, 1, null, 'limit');
+  }
 }
 
 /// Write access, available only inside [WorkspaceRepository.transaction].

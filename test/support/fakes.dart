@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:fetchren_core/fetchren_core.dart';
@@ -20,13 +21,14 @@ RequestItem makeItem(
   List<HeaderEntry> headers = const [],
   String body = '',
   DateTime? updatedAt,
+  String sortKey = 'i',
 }) => RequestItem(
   meta: EntityMeta(
     id: id,
     createdAt: updatedAt ?? fixedTime,
     updatedAt: updatedAt ?? fixedTime,
     version: 1,
-    sortKey: 'i',
+    sortKey: sortKey,
   ),
   workspaceId: collection.workspaceId,
   collectionId: collection.id,
@@ -45,6 +47,10 @@ class FakeWorkspaceRepository implements WorkspaceRepository {
   bool failLoads = false;
   bool failSaves = false;
   int commits = 0;
+  int summaryReads = 0;
+
+  /// When set, transactions wait for it before running.
+  Completer<void>? holdSaves;
 
   late Collection collection;
 
@@ -91,9 +97,25 @@ class FakeWorkspaceRepository implements WorkspaceRepository {
   Future<List<WorkspaceEntity>> children(
     String parentId, {
     bool includeDeleted = false,
+    int? limit,
   }) async {
     _checkLoad();
-    return _inner.children(parentId, includeDeleted: includeDeleted);
+    return _inner.children(
+      parentId,
+      includeDeleted: includeDeleted,
+      limit: limit,
+    );
+  }
+
+  @override
+  Future<List<RequestSummary>> requestSummaries(
+    String parentId, {
+    required int limit,
+    RequestSummary? after,
+  }) async {
+    _checkLoad();
+    summaryReads++;
+    return _inner.requestSummaries(parentId, limit: limit, after: after);
   }
 
   @override
@@ -101,6 +123,7 @@ class FakeWorkspaceRepository implements WorkspaceRepository {
     Future<T> Function(WorkspaceWriter tx) action,
   ) async {
     if (failSaves) throw Exception('disk full');
+    await holdSaves?.future;
     final result = await _inner.transaction(action);
     commits++;
     return result;

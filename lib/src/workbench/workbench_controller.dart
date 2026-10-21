@@ -21,6 +21,9 @@ class WorkbenchController extends ChangeNotifier {
        _canPersist = persistenceAvailable,
        _storageMessage = startupMessage;
 
+  /// Saved requests read from storage per page.
+  static const int pageSize = 100;
+
   final RequestExecutor _executor;
   final WorkspaceRepository _repository;
   final Collection _collection;
@@ -32,8 +35,19 @@ class WorkbenchController extends ChangeNotifier {
   String _url = '';
   List<HeaderEntry> _headers = [HeaderEntry.create()];
   String _body = '';
-  String? _activeId;
-  List<RequestItem> _saved = const [];
+  // The saved request being edited, as last read or written.
+  RequestItem? _active;
+  List<RequestSummary> _saved = const [];
+  // Last summary read from storage; the next page starts after it.
+  RequestSummary? _cursor;
+  bool _hasMore = false;
+  bool _isLoadingMore = false;
+  // Lowest sort key in the collection; new requests go before it.
+  String? _frontKey;
+  // Requests saved while persistence is unavailable, so they can be reopened.
+  final Map<String, RequestItem> _sessionOnly = {};
+  Future<void> _pendingWrite = Future.value();
+  int _navigation = 0;
   bool _isLoaded = false;
   bool _isSending = false;
   RequestOutcome? _outcome;
@@ -47,10 +61,13 @@ class WorkbenchController extends ChangeNotifier {
   String get body => _body;
 
   /// ID of the saved request currently being edited, if any.
-  String? get activeId => _activeId;
+  String? get activeId => _active?.id;
 
-  /// Saved requests, most recently updated first.
-  List<RequestItem> get savedRequests => List.unmodifiable(_saved);
+  /// Loaded saved requests, most recently updated first.
+  List<RequestSummary> get savedRequests => List.unmodifiable(_saved);
+
+  /// Whether more saved requests can be read with [loadMore].
+  bool get hasMoreSaved => _hasMore;
   bool get isLoaded => _isLoaded;
   bool get isSending => _isSending;
   RequestOutcome? get outcome => _outcome;
@@ -64,7 +81,7 @@ class WorkbenchController extends ChangeNotifier {
 
   Future<void> load() async {
     try {
-      _saved = await _readSaved();
+      await _readFirstPage();
     } on Exception {
       _canPersist = false;
       _storageMessage =
@@ -72,6 +89,35 @@ class WorkbenchController extends ChangeNotifier {
           'overwriting them.';
     }
     _isLoaded = true;
+    notifyListeners();
+  }
+
+  /// Appends the next page of saved requests, if any.
+  ///
+  /// Safe to call during build: listeners are notified asynchronously.
+  Future<void> loadMore() async {
+    if (!_hasMore || _isLoadingMore) return;
+    _isLoadingMore = true;
+    try {
+      final page = await _repository.requestSummaries(
+        _collection.id,
+        limit: pageSize,
+        after: _cursor,
+      );
+      final loaded = {for (final s in _saved) s.id};
+      _saved = [
+        ..._saved,
+        for (final s in page)
+          if (!loaded.contains(s.id)) s,
+      ];
+      _cursor = page.lastOrNull ?? _cursor;
+      _hasMore = page.length == pageSize;
+    } on Exception {
+      _hasMore = false;
+      _storageMessage = 'Some saved requests could not be loaded.';
+    } finally {
+      _isLoadingMore = false;
+    }
     notifyListeners();
   }
 
@@ -162,10 +208,10 @@ class WorkbenchController extends ChangeNotifier {
       headers: _headers,
       body: _body,
     );
-    final existing = _saved.where((r) => r.id == _activeId).firstOrNull;
+    final existing = _active;
     final request = existing == null
         ? RequestItem(
-            meta: EntityMeta.create(now: now, sortKey: _frontSortKey()),
+            meta: EntityMeta.create(now: now, sortKey: _nextFrontKey()),
             workspaceId: _collection.workspaceId,
             collectionId: _collection.id,
             name: _defaultName(),
@@ -176,18 +222,44 @@ class WorkbenchController extends ChangeNotifier {
             name: _defaultName(),
             template: template,
           );
-    _activeId = request.id;
+    _active = request;
     _saved = [
-      request,
+      RequestSummary.of(request),
       for (final r in _saved)
         if (r.id != request.id) r,
     ];
+    if (!_canPersist) _sessionOnly[request.id] = request;
     notifyListeners();
     await _persist((tx) => tx.put(request));
   }
 
-  void open(RequestItem request) {
-    _activeId = request.id;
+  /// Reads the saved request [id] and replaces the draft with it.
+  Future<void> open(String id) async {
+    final navigation = ++_navigation;
+    WorkspaceEntity? found;
+    try {
+      // A save may still be waiting for the write lock.
+      await _pendingWrite;
+      found = _sessionOnly[id] ?? await _repository.get(id);
+    } on Exception {
+      if (navigation != _navigation) return;
+      _storageMessage = 'The saved request could not be opened.';
+      notifyListeners();
+      return;
+    }
+    // Another request was opened, or a new one started, while reading.
+    if (navigation != _navigation) return;
+    if (found is! RequestItem || found.meta.isDeleted) {
+      _saved = [
+        for (final r in _saved)
+          if (r.id != id) r,
+      ];
+      _storageMessage = 'That request was deleted in another FetchRen window.';
+      notifyListeners();
+      return;
+    }
+    final request = found;
+    _active = request;
     _method = request.template.method;
     _url = request.template.url;
     _headers = request.template.headers.isEmpty
@@ -200,7 +272,8 @@ class WorkbenchController extends ChangeNotifier {
   }
 
   void newRequest() {
-    _activeId = null;
+    _navigation++;
+    _active = null;
     _method = HttpMethod.get;
     _url = '';
     _headers = [HeaderEntry.create()];
@@ -215,7 +288,8 @@ class WorkbenchController extends ChangeNotifier {
       for (final r in _saved)
         if (r.id != id) r,
     ];
-    if (_activeId == id) _activeId = null;
+    if (_active?.id == id) _active = null;
+    _sessionOnly.remove(id);
     notifyListeners();
     await _persist((tx) => tx.softDelete(id, _clock().toUtc()));
   }
@@ -226,15 +300,19 @@ class WorkbenchController extends ChangeNotifier {
   }
 
   // New requests sort first, matching the newest-first list.
-  String _frontSortKey() {
-    final keys = _saved.map((r) => r.meta.sortKey).toList()..sort();
-    return sortKeyBetween(null, keys.firstOrNull);
-  }
+  String _nextFrontKey() => _frontKey = sortKeyBetween(null, _frontKey);
 
-  Future<List<RequestItem>> _readSaved() async => [
-    for (final entity in await _repository.children(_collection.id))
-      if (entity is RequestItem) entity,
-  ]..sort(_newestFirst);
+  Future<void> _readFirstPage() async {
+    final page = await _repository.requestSummaries(
+      _collection.id,
+      limit: pageSize,
+    );
+    final first = await _repository.children(_collection.id, limit: 1);
+    _saved = page;
+    _cursor = page.lastOrNull;
+    _hasMore = page.length == pageSize;
+    _frontKey = first.firstOrNull?.meta.sortKey;
+  }
 
   Future<void> _persist(Future<void> Function(WorkspaceWriter tx) write) async {
     if (!_canPersist) {
@@ -242,7 +320,10 @@ class WorkbenchController extends ChangeNotifier {
       return;
     }
     try {
-      await _repository.transaction(write);
+      final pending = _repository.transaction(write);
+      // Transactions are serialized, so this completes after earlier writes.
+      _pendingWrite = pending.then<void>((_) {}, onError: (Object _) {});
+      await pending;
       _storageMessage = null;
     } on StaleWriteException {
       _storageMessage =
@@ -256,17 +337,19 @@ class WorkbenchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Shows what is actually stored rather than an unsaved change.
+  // Shows what is actually stored rather than an unsaved change, and edits
+  // the stored version of the active request from now on.
   Future<void> _reloadAfterFailedWrite() async {
     try {
-      _saved = await _readSaved();
+      await _readFirstPage();
+      if (_active case final active?) {
+        final stored = await _repository.get(active.id);
+        _active = stored is RequestItem && !stored.meta.isDeleted
+            ? stored
+            : null;
+      }
     } on Exception {
       // Keep the current list; the storage message already explains.
     }
   }
-}
-
-int _newestFirst(RequestItem a, RequestItem b) {
-  final byUpdated = b.meta.updatedAt.compareTo(a.meta.updatedAt);
-  return byUpdated != 0 ? byUpdated : a.id.compareTo(b.id);
 }

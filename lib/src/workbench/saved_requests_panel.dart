@@ -49,30 +49,35 @@ class SavedRequestsPanel extends StatelessWidget {
                   ? const Center(child: CircularProgressIndicator())
                   : saved.isEmpty
                   ? const Center(child: Text('No saved requests'))
-                  : ListView(
-                      children: [
-                        for (final request in saved)
-                          ListTile(
-                            key: ValueKey('saved-${request.id}'),
-                            dense: true,
-                            selected: request.id == controller.activeId,
-                            leading: Text(
-                              request.template.method.wireName,
-                              style: theme.textTheme.labelSmall,
-                            ),
-                            title: Text(
-                              request.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onTap: () => controller.open(request),
-                            trailing: IconButton(
-                              tooltip: 'Delete',
-                              icon: const Icon(Icons.delete_outline, size: 18),
-                              onPressed: () => controller.delete(request.id),
-                            ),
+                  : ListView.builder(
+                      itemCount: saved.length,
+                      itemBuilder: (context, index) {
+                        if (index == saved.length - 1 &&
+                            controller.hasMoreSaved) {
+                          controller.loadMore();
+                        }
+                        final request = saved[index];
+                        return ListTile(
+                          key: ValueKey('saved-${request.id}'),
+                          dense: true,
+                          selected: request.id == controller.activeId,
+                          leading: Text(
+                            request.method.wireName,
+                            style: theme.textTheme.labelSmall,
                           ),
-                      ],
+                          title: Text(
+                            request.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => controller.open(request.id),
+                          trailing: IconButton(
+                            tooltip: 'Delete',
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: () => controller.delete(request.id),
+                          ),
+                        );
+                      },
                     ),
             ),
           ],
