@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:fetchren/src/http/request_executor.dart';
 import 'package:fetchren/src/http/request_outcome.dart';
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
 import 'package:fetchren/src/workbench/workbench_controller.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -12,19 +11,26 @@ import 'package:http/testing.dart';
 import '../support/fakes.dart';
 
 void main() {
-  late InMemoryRequestStore store;
+  late FakeWorkspaceRepository store;
   late DateTime now;
 
-  WorkbenchController build({http.Client? client}) => WorkbenchController(
+  WorkbenchController build({
+    http.Client? client,
+    bool persistenceAvailable = true,
+    String? startupMessage,
+  }) => WorkbenchController(
     executor: RequestExecutor(
       client ?? MockClient((_) async => http.Response('{}', 200)),
     ),
-    store: store,
+    repository: store,
+    collection: store.collection,
     clock: () => now,
+    persistenceAvailable: persistenceAvailable,
+    startupMessage: startupMessage,
   );
 
-  setUp(() {
-    store = InMemoryRequestStore();
+  setUp(() async {
+    store = await FakeWorkspaceRepository.create();
     now = DateTime.utc(2026, 10, 21, 9);
   });
 
@@ -60,7 +66,9 @@ void main() {
       final controller = build(client: MockClient((_) => pending.future))
         ..setUrl('https://a.test');
       final sending = controller.send();
-      controller.open(makeRequest(id: 'other', url: 'https://b.test'));
+      controller.open(
+        makeItem(store.collection, id: 'other', url: 'https://b.test'),
+      );
       pending.complete(http.Response('from a', 200));
       await sending;
       expect(controller.isSending, isFalse);
@@ -75,17 +83,33 @@ void main() {
     expect(controller.isLoaded, isTrue);
     controller.setUrl('https://a.test');
     await controller.save();
-    expect(store.saveCount, 0);
+    expect(store.commits, 0);
     expect(controller.storageMessage, contains('Saving is disabled'));
   });
 
-  test('load populates saved requests', () async {
-    store.saved = [makeRequest(id: 'a')];
+  test('a startup problem disables saving and is shown', () async {
+    final controller = build(
+      persistenceAvailable: false,
+      startupMessage: 'Database is from a newer FetchRen.',
+    );
+    await controller.load();
+    controller.setUrl('https://a.test');
+    await controller.save();
+    expect(store.commits, 0);
+    expect(controller.storageMessage, 'Database is from a newer FetchRen.');
+    expect(controller.savedRequests, hasLength(1), reason: 'session only');
+  });
+
+  test('load lists saved requests newest first', () async {
+    store = await FakeWorkspaceRepository.create([
+      (c) => makeItem(c, id: 'old', updatedAt: DateTime.utc(2026, 1)),
+      (c) => makeItem(c, id: 'new', updatedAt: DateTime.utc(2026, 3)),
+    ]);
     final controller = build();
     expect(controller.isLoaded, isFalse);
     await controller.load();
     expect(controller.isLoaded, isTrue);
-    expect(controller.savedRequests.single.id, 'a');
+    expect(controller.savedRequests.map((r) => r.id), ['new', 'old']);
   });
 
   test('save creates a request with a stable ID and timestamps', () async {
@@ -95,47 +119,64 @@ void main() {
       ..setBody('x');
     await controller.save();
 
-    final saved = store.saved.single;
+    final saved = (await store.stored()).single;
     expect(saved.id, matches(RegExp(r'^[0-9a-f]{32}$')));
-    expect(saved.createdAt, now);
-    expect(saved.updatedAt, now);
-    expect(saved.method, HttpMethod.post);
+    expect(saved.meta.createdAt, now);
+    expect(saved.meta.updatedAt, now);
+    expect(saved.meta.version, 1);
+    expect(saved.template.method, HttpMethod.post);
+    expect(saved.template.body, 'x');
     expect(saved.name, 'https://api.example.test/a');
+    expect(saved.collectionId, store.collection.id);
     expect(controller.activeId, saved.id);
+    expect(controller.storageMessage, isNull);
   });
 
-  test('saving again updates in place and keeps createdAt', () async {
-    final controller = build()..setUrl('https://api.example.test/a');
-    await controller.save();
-    final id = controller.activeId;
-    final created = now;
+  test(
+    'saving again updates in place, bumps version, keeps createdAt',
+    () async {
+      final controller = build()..setUrl('https://api.example.test/a');
+      await controller.save();
+      final id = controller.activeId;
+      final created = now;
 
-    now = now.add(const Duration(minutes: 5));
-    controller.setUrl('https://api.example.test/b');
-    await controller.save();
+      now = now.add(const Duration(minutes: 5));
+      controller.setUrl('https://api.example.test/b');
+      await controller.save();
 
-    final saved = store.saved.single;
-    expect(saved.id, id);
-    expect(saved.createdAt, created);
-    expect(saved.updatedAt, now);
-    expect(saved.url, 'https://api.example.test/b');
-  });
+      final saved = (await store.stored()).single;
+      expect(saved.id, id);
+      expect(saved.meta.version, 2);
+      expect(saved.meta.createdAt, created);
+      expect(saved.meta.updatedAt, now);
+      expect(saved.template.url, 'https://api.example.test/b');
+    },
+  );
 
-  test('newRequest followed by save creates a second entry', () async {
+  test('newRequest followed by save creates a second entry first', () async {
     final controller = build()..setUrl('https://a.test');
     await controller.save();
+    now = now.add(const Duration(seconds: 1));
     controller
       ..newRequest()
       ..setUrl('https://b.test');
     await controller.save();
-    expect(store.saved.map((r) => r.url), ['https://b.test', 'https://a.test']);
+    expect((await store.stored()).map((r) => r.template.url), [
+      'https://b.test',
+      'https://a.test',
+    ], reason: 'stored order matches the newest-first list');
+    expect(controller.savedRequests.map((r) => r.template.url), [
+      'https://b.test',
+      'https://a.test',
+    ]);
   });
 
   test('open replaces the draft and bumps the revision', () async {
     final controller = build();
     final revision = controller.draftRevision;
     controller.open(
-      makeRequest(
+      makeItem(
+        store.collection,
         id: 'z',
         method: HttpMethod.delete,
         url: 'https://z.test',
@@ -151,15 +192,55 @@ void main() {
     expect(controller.draftRevision, revision + 1);
   });
 
-  test('delete removes the request and clears the active ID', () async {
-    store.saved = [makeRequest(id: 'a'), makeRequest(id: 'b')];
+  test('delete tombstones the request and clears the active ID', () async {
+    store = await FakeWorkspaceRepository.create([
+      (c) => makeItem(c, id: 'a'),
+      (c) => makeItem(c, id: 'b'),
+    ]);
     final controller = build();
     await controller.load();
-    controller.open(controller.savedRequests.first);
+    controller.open(controller.savedRequests.firstWhere((r) => r.id == 'a'));
     await controller.delete('a');
-    expect(store.saved.map((r) => r.id), ['b']);
+    expect((await store.stored()).map((r) => r.id), ['b']);
+    expect((await store.get('a'))!.meta.isDeleted, isTrue);
     expect(controller.activeId, isNull);
   });
+
+  test(
+    'a save that conflicts with another window is not overwritten',
+    () async {
+      store = await FakeWorkspaceRepository.create([
+        (c) => makeItem(c, id: 'a', url: 'https://original.test'),
+      ]);
+      final controller = build();
+      await controller.load();
+      controller.open(controller.savedRequests.single);
+
+      final other = (await store.get('a'))! as RequestItem;
+      await store.transaction(
+        (tx) => tx.put(
+          other.copyWith(
+            meta: other.meta.next(now),
+            template: other.template.copyWith(url: 'https://other-window.test'),
+          ),
+        ),
+      );
+
+      controller.setUrl('https://mine.test');
+      await controller.save();
+      expect(controller.storageMessage, contains('another FetchRen window'));
+      expect(
+        (await store.stored()).single.template.url,
+        'https://other-window.test',
+      );
+      expect(
+        controller.savedRequests.single.template.url,
+        'https://other-window.test',
+        reason: 'list reloaded from storage',
+      );
+      expect(controller.url, 'https://mine.test', reason: 'draft kept');
+    },
+  );
 
   test('header rows can be added, edited, and removed', () {
     final controller = build();
@@ -220,11 +301,12 @@ void main() {
     expect(controller.maxResponseBytes, 1024);
   });
 
-  test('reports storage failures without throwing', () async {
+  test('a failed save is reported and the list shows what is stored', () async {
     store.failSaves = true;
     final controller = build()..setUrl('https://a.test');
     await controller.save();
-    expect(controller.storageMessage, isNotNull);
-    expect(controller.savedRequests, hasLength(1), reason: 'kept in memory');
+    expect(controller.storageMessage, 'Requests could not be saved to disk.');
+    expect(controller.savedRequests, isEmpty);
+    expect(controller.url, 'https://a.test', reason: 'draft kept');
   });
 }

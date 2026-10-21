@@ -1,6 +1,6 @@
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 
 import 'http_method.dart';
 
@@ -83,7 +83,9 @@ class HeaderEntry {
   int get hashCode => Object.hash(id, name, value, enabled);
 }
 
-/// A saved or in-progress API request.
+/// A saved request in the schema-v1 `requests.json` format.
+///
+/// Superseded by `RequestItem`; kept until storage moves to the workspace model.
 @immutable
 class ApiRequest {
   ApiRequest({

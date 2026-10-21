@@ -1,0 +1,15 @@
+name: fetchren_core_testing
+description: Shared test suites and fixtures for fetchren_core implementations.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  fetchren_core:
+    path: ../fetchren_core
+  test: ^1.25.0
+
+dev_dependencies:
+  lints: ^6.1.0

@@ -2,14 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:http/http.dart' as http;
 
-import '../models/api_request.dart';
 import '../util/format.dart';
 import 'request_builder.dart';
 import 'request_outcome.dart';
 
-/// Executes [ApiRequest]s directly against the target server.
+/// Executes [ResolvedRequest]s directly against the target server.
 ///
 /// Never logs request headers or bodies. TLS verification is left to the
 /// platform defaults of the injected [http.Client].
@@ -31,7 +31,7 @@ class RequestExecutor {
   /// Responses larger than this are aborted.
   int maxResponseBytes;
 
-  Future<RequestOutcome> execute(ApiRequest request) async {
+  Future<RequestOutcome> execute(ResolvedRequest request) async {
     final abort = Completer<void>();
     final http.BaseRequest httpRequest;
     try {

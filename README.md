@@ -53,7 +53,16 @@ flutter run -d macos
 dart format --output=none --set-exit-if-changed .   # formatting check
 flutter analyze                                     # static analysis (flutter_lints)
 flutter test                                        # unit and widget tests
+(cd packages/fetchren_core && dart pub get && dart test)  # domain tests
+(cd packages/fetchren_storage_sqlite && dart pub get && dart test)  # SQLite tests
 flutter build macos                                 # macOS release build
+```
+
+Real-app persistence check (macOS; uses the app's real data directory; run
+the phases in order, one launch each, after seeding a v1 `requests.json`):
+
+```sh
+flutter test integration_test/persistence_test.dart -d macos --dart-define=PHASE=1
 ```
 
 ## Project structure
@@ -63,20 +72,34 @@ lib/
   main.dart                 # Entry point: wires the HTTP client, storage, and UI
   src/
     app.dart                # Root MaterialApp
-    models/                 # ApiRequest, HeaderEntry, HttpMethod (pure data)
     http/                   # Request building, execution, response formatting
-    storage/                # Local JSON persistence of saved requests
     workbench/              # Controller (ChangeNotifier) and UI widgets
     util/                   # Display formatting helpers
 test/                       # Mirrors lib/; support/ holds shared fakes
+integration_test/           # Real-app persistence check (macOS)
+packages/fetchren_core/     # Pure-Dart domain model and repository contract
+packages/fetchren_core_testing/   # Shared repository contract test suite
+packages/fetchren_storage_sqlite/ # SQLite repository and v1 migration
+docs/design/                # Design documents
 macos/                      # macOS desktop runner (Xcode project)
 ```
 
-Request execution (`lib/src/http/`) and persistence (`lib/src/storage/`) have
-no UI dependencies. The UI talks to them only through `WorkbenchController`,
-which receives a `RequestExecutor` and a `RequestStore` by constructor
-injection. Tests substitute a mock HTTP transport, a loopback test server, and
-an in-memory store.
+Domain types (workspaces, collections, folders, requests, entity metadata,
+request templates) and the `WorkspaceRepository` contract live in
+[`packages/fetchren_core`](packages/fetchren_core), which has no Flutter or
+`dart:io` dependency. Saved requests are stored in SQLite by
+[`packages/fetchren_storage_sqlite`](packages/fetchren_storage_sqlite). See
+[docs/design/domain-and-storage.md](docs/design/domain-and-storage.md).
+
+Requests are sent only as a `ResolvedRequest`, produced from the saved
+`RequestTemplate` by a resolver. Resolved values are never written back to
+saved requests.
+
+Request execution (`lib/src/http/`) and persistence have no UI dependencies.
+The UI talks to them only through `WorkbenchController`, which receives a
+`RequestExecutor` and a `WorkspaceRepository` by constructor injection. Tests
+substitute a mock HTTP transport, a loopback test server, and an in-memory
+repository.
 
 ### Dependencies
 
@@ -84,8 +107,10 @@ an in-memory store.
 | --- | --- | --- | --- |
 | [`http`](https://pub.dev/packages/http) | dart.dev | BSD-3-Clause | HTTP client and test transport (`MockClient`) |
 | [`path_provider`](https://pub.dev/packages/path_provider) | flutter.dev | BSD-3-Clause | Locating the app support directory |
+| [`meta`](https://pub.dev/packages/meta) (core) | dart.dev | BSD-3-Clause | `@immutable` and related annotations |
+| [`sqlite3`](https://pub.dev/packages/sqlite3) (storage) | simonbinder.eu | MIT | SQLite bindings; bundles SQLite via build hooks |
 
-No state-management framework or database is used.
+No state-management framework is used.
 
 ## Networking and security
 
@@ -111,18 +136,30 @@ No state-management framework or database is used.
 
 ### Local storage
 
-Saved requests are stored as JSON in `requests.json` inside the platform's
-application support directory. On a sandboxed macOS build, that directory is
-within `~/Library/Containers/<bundle id>/`. Each request has a random 128-bit ID
-and UTC `createdAt`/`updatedAt` timestamps. If the file cannot be read, it is
-renamed with a `.corrupt-<timestamp>` suffix rather than overwritten. If the
-file exists but cannot be accessed, for example because of permissions, saving
-is disabled for the session so the existing data is not overwritten.
+Saved requests are stored in a SQLite database, `workspace.sqlite`, inside the
+platform's application support directory. On a sandboxed macOS build, that
+directory is within `~/Library/Containers/<bundle id>/`. Each request has a
+random 128-bit ID, UTC `createdAt`/`updatedAt` timestamps, and a version
+number. Deleted requests are kept as deletion markers.
+
+On first launch after upgrading, an existing `requests.json` is imported once
+and then renamed to `requests.v1-migrated-<time>.json`; it is never deleted.
+If the file is invalid, nothing is imported, the file is left untouched, and
+the app explains why. See the recovery procedure in
+[docs/design/domain-and-storage.md](docs/design/domain-and-storage.md).
+
+If the database cannot be opened (for example, it was created by a newer
+FetchRen), it is not modified. The app then runs without saving for that
+session and shows a message.
+
+When the same request is edited in two FetchRen windows, the second save is
+rejected and the list is reloaded rather than silently overwriting the other
+window's change. Windows do not refresh each other's lists automatically.
 
 Current storage security limitations:
 
-- The file is **plain text and not encrypted**. It relies on operating-system
-  user permissions only.
+- The database (and its `-wal` file) is **plain text and not encrypted**. It
+  relies on operating-system user permissions only.
 - Values of `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`,
   `X-API-Key`, `Api-Key`, and `X-Auth-Token` headers are **not saved**. Only
   the header names are kept, so these values must be re-entered after a

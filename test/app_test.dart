@@ -9,11 +9,13 @@ import 'support/fakes.dart';
 
 void main() {
   testWidgets('FetchRenApp renders the workbench', (tester) async {
+    final repository = await FakeWorkspaceRepository.create();
     final controller = WorkbenchController(
       executor: RequestExecutor(
         MockClient((_) async => http.Response('', 200)),
       ),
-      store: InMemoryRequestStore(),
+      repository: repository,
+      collection: repository.collection,
     );
     await controller.load();
     await tester.pumpWidget(FetchRenApp(controller: controller));

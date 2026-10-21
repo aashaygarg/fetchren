@@ -4,8 +4,7 @@ import 'dart:io';
 
 import 'package:fetchren/src/http/request_executor.dart';
 import 'package:fetchren/src/http/request_outcome.dart';
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -66,7 +65,7 @@ void main() {
   test('round-trips method, headers, and body', () async {
     final executor = RequestExecutor(client);
     final response = await executor.execute(
-      makeRequest(
+      makeResolved(
         method: HttpMethod.put,
         url: '$baseUrl/echo',
         headers: const [HeaderEntry(id: '1', name: 'X-Test', value: 'hello')],
@@ -85,7 +84,7 @@ void main() {
   test('returns non-2xx responses', () async {
     final response = await RequestExecutor(
       client,
-    ).execute(makeRequest(url: '$baseUrl/missing')) as ApiResponse;
+    ).execute(makeResolved(url: '$baseUrl/missing')) as ApiResponse;
     expect(response.statusCode, 404);
     expect(response.body, 'not found');
   });
@@ -94,7 +93,7 @@ void main() {
     final failure = await RequestExecutor(
       client,
       timeout: const Duration(milliseconds: 200),
-    ).execute(makeRequest(url: '$baseUrl/slow')) as RequestFailure;
+    ).execute(makeResolved(url: '$baseUrl/slow')) as RequestFailure;
     expect(failure.kind, FailureKind.timeout);
   });
 
@@ -102,7 +101,7 @@ void main() {
     final failure = await RequestExecutor(
       client,
       maxResponseBytes: 8 * 1024,
-    ).execute(makeRequest(url: '$baseUrl/big')) as RequestFailure;
+    ).execute(makeResolved(url: '$baseUrl/big')) as RequestFailure;
     expect(failure.kind, FailureKind.responseTooLarge);
   });
 
@@ -112,7 +111,7 @@ void main() {
     await closed.close();
     final failure = await RequestExecutor(
       client,
-    ).execute(makeRequest(url: 'http://127.0.0.1:$port/')) as RequestFailure;
+    ).execute(makeResolved(url: 'http://127.0.0.1:$port/')) as RequestFailure;
     expect(failure.kind, FailureKind.network);
   });
 
@@ -120,13 +119,13 @@ void main() {
     final failure = await RequestExecutor(
       client,
       maxResponseBytes: 8 * 1024,
-    ).execute(makeRequest(url: '$baseUrl/gzip')) as RequestFailure;
+    ).execute(makeResolved(url: '$baseUrl/gzip')) as RequestFailure;
     expect(failure.kind, FailureKind.responseTooLarge);
   });
 
   test('returns redirects instead of following them', () async {
     final response = await RequestExecutor(client).execute(
-      makeRequest(
+      makeResolved(
         url: '$baseUrl/redirect',
         headers: const [HeaderEntry(id: '1', name: 'X-API-Key', value: 'k')],
       ),
@@ -139,7 +138,7 @@ void main() {
   test('rejects out-of-range ports without throwing (regression)', () async {
     final failure = await RequestExecutor(
       client,
-    ).execute(makeRequest(url: 'http://127.0.0.1:99999/')) as RequestFailure;
+    ).execute(makeResolved(url: 'http://127.0.0.1:99999/')) as RequestFailure;
     expect(failure.kind, FailureKind.invalidUrl);
   });
 }

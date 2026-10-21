@@ -2,8 +2,7 @@ import 'dart:convert';
 
 import 'package:fetchren/src/http/request_builder.dart';
 import 'package:fetchren/src/http/request_outcome.dart';
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fakes.dart';
@@ -135,7 +134,7 @@ void main() {
   group('buildHttpRequest', () {
     test('sets method, URL, and headers', () {
       final request = buildHttpRequest(
-        makeRequest(
+        makeResolved(
           method: HttpMethod.options,
           url: 'https://api.example.test/x',
           headers: const [HeaderEntry(id: '1', name: 'Accept', value: '*/*')],
@@ -150,7 +149,7 @@ void main() {
     test('encodes the body as UTF-8 for methods that allow one', () {
       for (final method in HttpMethod.values.where((m) => m.allowsBody)) {
         final request = buildHttpRequest(
-          makeRequest(method: method, body: '{"name":"café"}'),
+          makeResolved(method: method, body: '{"name":"café"}'),
         );
         expect(request.bodyBytes, utf8.encode('{"name":"café"}'));
         expect(
@@ -168,7 +167,7 @@ void main() {
         HttpMethod.options,
       ]) {
         final request = buildHttpRequest(
-          makeRequest(method: method, body: 'ignored'),
+          makeResolved(method: method, body: 'ignored'),
         );
         expect(request.bodyBytes, isEmpty, reason: method.wireName);
       }
@@ -176,7 +175,7 @@ void main() {
 
     test('propagates validation failures', () {
       expect(
-        () => buildHttpRequest(makeRequest(url: 'ws://example.test')),
+        () => buildHttpRequest(makeResolved(url: 'ws://example.test')),
         _rejectedAs(FailureKind.unsupportedScheme),
       );
     });

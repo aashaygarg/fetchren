@@ -1,50 +1,108 @@
 import 'dart:io';
 
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
-import 'package:fetchren/src/storage/request_store.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 
 final DateTime fixedTime = DateTime.utc(2026, 10, 21, 12);
 
-ApiRequest makeRequest({
+ResolvedRequest makeResolved({
+  HttpMethod method = HttpMethod.get,
+  String url = 'https://api.example.test/items',
+  List<HeaderEntry> headers = const [],
+  String body = '',
+}) => ResolvedRequest(method: method, url: url, headers: headers, body: body);
+
+/// A saved request in [collection].
+RequestItem makeItem(
+  Collection collection, {
   String id = 'req-1',
   HttpMethod method = HttpMethod.get,
   String url = 'https://api.example.test/items',
   List<HeaderEntry> headers = const [],
   String body = '',
-  DateTime? createdAt,
   DateTime? updatedAt,
-}) => ApiRequest(
-  id: id,
+}) => RequestItem(
+  meta: EntityMeta(
+    id: id,
+    createdAt: updatedAt ?? fixedTime,
+    updatedAt: updatedAt ?? fixedTime,
+    version: 1,
+    sortKey: 'i',
+  ),
+  workspaceId: collection.workspaceId,
+  collectionId: collection.id,
   name: url,
-  method: method,
-  url: url,
-  headers: headers,
-  body: body,
-  createdAt: createdAt ?? fixedTime,
-  updatedAt: updatedAt ?? fixedTime,
+  template: RequestTemplate(
+    method: method,
+    url: url,
+    headers: headers,
+    body: body,
+  ),
 );
 
-/// In-memory [RequestStore] that records what was saved.
-class InMemoryRequestStore implements RequestStore {
-  InMemoryRequestStore([List<ApiRequest> initial = const []])
-    : saved = [for (final r in initial) r.redactedForStorage()];
-
-  List<ApiRequest> saved;
-  int saveCount = 0;
-  bool failSaves = false;
+/// [InMemoryWorkspaceRepository] with failure switches and a commit counter.
+class FakeWorkspaceRepository implements WorkspaceRepository {
+  final InMemoryWorkspaceRepository _inner = InMemoryWorkspaceRepository();
   bool failLoads = false;
+  bool failSaves = false;
+  int commits = 0;
 
-  @override
-  Future<StoreLoadResult> loadAll() async {
+  late Collection collection;
+
+  /// Creates the default workspace and collection, then resets [commits].
+  static Future<FakeWorkspaceRepository> create([
+    List<RequestItem Function(Collection)> seed = const [],
+  ]) async {
+    final repo = FakeWorkspaceRepository();
+    repo.collection = await ensureDefaultCollection(
+      repo._inner,
+      now: fixedTime,
+    );
+    await repo._inner.transaction((tx) async {
+      for (final make in seed) {
+        await tx.put(make(repo.collection));
+      }
+    });
+    return repo;
+  }
+
+  /// Live requests in [collection], as stored.
+  Future<List<RequestItem>> stored() async => [
+    for (final e in await _inner.children(collection.id))
+      if (e is RequestItem) e,
+  ];
+
+  void _checkLoad() {
     if (failLoads) throw const FileSystemException('permission denied');
-    return StoreLoadResult([...saved]);
   }
 
   @override
-  Future<void> saveAll(List<ApiRequest> requests) async {
+  Future<WorkspaceEntity?> get(String id) async {
+    _checkLoad();
+    return _inner.get(id);
+  }
+
+  @override
+  Future<List<Workspace>> workspaces({bool includeDeleted = false}) async {
+    _checkLoad();
+    return _inner.workspaces(includeDeleted: includeDeleted);
+  }
+
+  @override
+  Future<List<WorkspaceEntity>> children(
+    String parentId, {
+    bool includeDeleted = false,
+  }) async {
+    _checkLoad();
+    return _inner.children(parentId, includeDeleted: includeDeleted);
+  }
+
+  @override
+  Future<T> transaction<T>(
+    Future<T> Function(WorkspaceWriter tx) action,
+  ) async {
     if (failSaves) throw Exception('disk full');
-    saveCount++;
-    saved = [for (final r in requests) r.redactedForStorage()];
+    final result = await _inner.transaction(action);
+    commits++;
+    return result;
   }
 }

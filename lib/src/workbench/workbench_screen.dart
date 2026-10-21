@@ -1,6 +1,6 @@
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter/material.dart';
 
-import '../models/http_method.dart';
 import 'request_editor.dart';
 import 'response_view.dart';
 import 'saved_requests_panel.dart';
@@ -21,13 +21,16 @@ class _WorkbenchScreenState extends State<WorkbenchScreen> {
   late final TextEditingController _url = TextEditingController(
     text: widget.controller.url,
   );
-  late int _revision = widget.controller.draftRevision;
+  late int _revision;
 
   WorkbenchController get _controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
+    // Captured now, not lazily: a lazy read inside _syncDraft would already
+    // see the new revision and skip the first sync.
+    _revision = _controller.draftRevision;
     _controller.addListener(_syncDraft);
   }
 

@@ -57,7 +57,7 @@ class SavedRequestsPanel extends StatelessWidget {
                             dense: true,
                             selected: request.id == controller.activeId,
                             leading: Text(
-                              request.method.wireName,
+                              request.template.method.wireName,
                               style: theme.textTheme.labelSmall,
                             ),
                             title: Text(

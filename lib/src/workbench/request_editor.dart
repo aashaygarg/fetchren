@@ -1,6 +1,6 @@
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter/material.dart';
 
-import '../models/api_request.dart';
 import 'workbench_controller.dart';
 
 /// Tabs for editing request headers and body.

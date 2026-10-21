@@ -1,8 +1,8 @@
 import 'dart:convert';
 
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:http/http.dart' as http;
 
-import '../models/api_request.dart';
 import 'request_outcome.dart';
 
 /// Thrown when a request cannot be constructed from user input.
@@ -111,14 +111,14 @@ Map<String, String> buildHeaders(Iterable<HeaderEntry> entries) {
   return headers;
 }
 
-/// Converts an [ApiRequest] into an abortable `package:http` request.
+/// Converts a [ResolvedRequest] into an abortable `package:http` request.
 ///
 /// The body is only attached for methods that allow one. No Content-Type is
 /// added automatically; the user controls all headers. Redirects are returned
 /// to the caller rather than followed, because dart:io forwards custom
 /// credential headers (e.g. `X-API-Key`) to cross-origin redirect targets.
 http.AbortableRequest buildHttpRequest(
-  ApiRequest request, {
+  ResolvedRequest request, {
   Future<void>? abortTrigger,
 }) {
   final uri = parseRequestUrl(request.url);

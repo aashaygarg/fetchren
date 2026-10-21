@@ -1,0 +1,16 @@
+name: fetchren_core
+description: Platform-independent domain model and contracts for FetchRen.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  meta: ^1.18.0
+
+dev_dependencies:
+  fetchren_core_testing:
+    path: ../fetchren_core_testing
+  lints: ^6.1.0
+  test: ^1.25.0

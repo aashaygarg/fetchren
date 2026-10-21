@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:fetchren/src/app.dart';
 import 'package:fetchren/src/http/request_executor.dart';
-import 'package:fetchren/src/models/http_method.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:fetchren/src/workbench/workbench_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,23 +12,28 @@ import 'package:http/testing.dart';
 import '../support/fakes.dart';
 
 void main() {
-  late InMemoryRequestStore store;
+  late FakeWorkspaceRepository store;
 
-  setUp(() => store = InMemoryRequestStore());
-
+  // The repository is created inside the test so its futures belong to the
+  // fake-async zone that pumpAndSettle drives.
   Future<WorkbenchController> pumpWorkbench(
     WidgetTester tester, {
     http.Client? client,
+    bool failSaves = false,
+    List<RequestItem Function(Collection)> seed = const [],
   }) async {
     tester.view
       ..physicalSize = const Size(1400, 900)
       ..devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    store = await FakeWorkspaceRepository.create(seed);
+    store.failSaves = failSaves;
     final controller = WorkbenchController(
       executor: RequestExecutor(
         client ?? MockClient((_) async => http.Response('', 200)),
       ),
-      store: store,
+      repository: store,
+      collection: store.collection,
     );
     await controller.load();
     await tester.pumpWidget(FetchRenApp(controller: controller));
@@ -45,6 +50,29 @@ void main() {
     expect(find.byKey(const Key('response-empty')), findsOneWidget);
     expect(find.text('No saved requests'), findsOneWidget);
   });
+
+  // Regression: opening a request as the first action after launch left the
+  // URL field empty (found by the macOS integration test).
+  testWidgets(
+    'opening a saved request first thing after launch fills the URL',
+    (tester) async {
+      await pumpWorkbench(
+        tester,
+        seed: [(c) => makeItem(c, id: 'a', url: 'https://first-open.test')],
+      );
+      await tester.tap(
+        find.widgetWithText(ListTile, 'https://first-open.test'),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('url-field')))
+            .controller!
+            .text,
+        'https://first-open.test',
+      );
+    },
+  );
 
   testWidgets('shows loading state, then pretty JSON response', (tester) async {
     final pending = Completer<http.Response>();
@@ -155,7 +183,10 @@ void main() {
     await tester.tap(find.byKey(const Key('save-button')));
     await tester.pumpAndSettle();
 
-    expect(store.saved.single.url, 'https://api.example.test/saved');
+    expect(
+      (await store.stored()).single.template.url,
+      'https://api.example.test/saved',
+    );
     final listEntry = find.widgetWithText(
       ListTile,
       'https://api.example.test/saved',
@@ -202,8 +233,7 @@ void main() {
   });
 
   testWidgets('shows a storage message when saving fails', (tester) async {
-    store.failSaves = true;
-    await pumpWorkbench(tester);
+    await pumpWorkbench(tester, failSaves: true);
     await tester.tap(find.byKey(const Key('save-button')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('storage-message')), findsOneWidget);

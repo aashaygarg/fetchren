@@ -3,8 +3,7 @@ import 'dart:convert';
 
 import 'package:fetchren/src/http/request_executor.dart';
 import 'package:fetchren/src/http/request_outcome.dart';
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
+import 'package:fetchren_core/fetchren_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -28,7 +27,7 @@ void main() {
       );
 
       final outcome = await executor.execute(
-        makeRequest(
+        makeResolved(
           method: HttpMethod.post,
           url: 'https://api.example.test/items',
           headers: const [
@@ -58,7 +57,7 @@ void main() {
         final executor = RequestExecutor(
           MockClient((_) async => http.Response('nope', status)),
         );
-        final outcome = await executor.execute(makeRequest());
+        final outcome = await executor.execute(makeResolved());
         expect(outcome, isA<ApiResponse>());
         final response = outcome as ApiResponse;
         expect(response.statusCode, status);
@@ -75,7 +74,7 @@ void main() {
         }),
       );
       final response = await executor.execute(
-        makeRequest(method: HttpMethod.head),
+        makeResolved(method: HttpMethod.head),
       ) as ApiResponse;
       expect(response.statusCode, 204);
       expect(response.bodyBytes, isEmpty);
@@ -89,7 +88,7 @@ void main() {
           return http.Response('', 200);
         }),
       );
-      final outcome = await executor.execute(makeRequest(url: 'not a url'));
+      final outcome = await executor.execute(makeResolved(url: 'not a url'));
       expect((outcome as RequestFailure).kind, FailureKind.invalidUrl);
       expect(calls, 0);
     });
@@ -99,12 +98,12 @@ void main() {
         MockClient((_) async => http.Response('', 200)),
       );
       final scheme = await executor.execute(
-        makeRequest(url: 'ftp://example.test'),
+        makeResolved(url: 'ftp://example.test'),
       );
       expect((scheme as RequestFailure).kind, FailureKind.unsupportedScheme);
 
       final header = await executor.execute(
-        makeRequest(
+        makeResolved(
           headers: const [HeaderEntry(id: '1', value: 'orphan')],
         ),
       );
@@ -117,7 +116,7 @@ void main() {
           throw http.ClientException('Connection refused', request.url);
         }),
       );
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.network);
       expect(failure.message, 'Connection refused');
       expect(failure.elapsed, isNotNull);
@@ -127,7 +126,7 @@ void main() {
       final executor = RequestExecutor(
         MockClient((_) async => throw const FormatException('TLS failure')),
       );
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.network);
       expect(failure.message, contains('TLS failure'));
     });
@@ -138,7 +137,7 @@ void main() {
         MockClient((_) => never.future),
         timeout: const Duration(milliseconds: 50),
       );
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.timeout);
     });
 
@@ -152,7 +151,7 @@ void main() {
         timeout: const Duration(milliseconds: 50),
       );
       body.add(utf8.encode('partial'));
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.timeout);
     });
 
@@ -161,7 +160,7 @@ void main() {
         MockClient((_) async => http.Response('x' * 11, 200)),
         maxResponseBytes: 10,
       );
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.responseTooLarge);
       expect(failure.message, contains('10 B'));
     });
@@ -180,7 +179,7 @@ void main() {
         ),
         maxResponseBytes: 10,
       );
-      final failure = await executor.execute(makeRequest()) as RequestFailure;
+      final failure = await executor.execute(makeResolved()) as RequestFailure;
       expect(failure.kind, FailureKind.responseTooLarge);
     });
 
@@ -189,7 +188,7 @@ void main() {
         MockClient((_) async => http.Response('x' * 10, 200)),
         maxResponseBytes: 10,
       );
-      final response = await executor.execute(makeRequest()) as ApiResponse;
+      final response = await executor.execute(makeResolved()) as ApiResponse;
       expect(response.bodyBytes.length, 10);
     });
   });

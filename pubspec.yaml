@@ -28,6 +28,10 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  fetchren_core:
+    path: packages/fetchren_core
+  fetchren_storage_sqlite:
+    path: packages/fetchren_storage_sqlite
   flutter:
     sdk: flutter
   http: ^1.6.0
@@ -43,6 +47,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  integration_test:
+    sdk: flutter
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

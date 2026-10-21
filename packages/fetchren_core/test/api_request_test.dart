@@ -1,8 +1,7 @@
-import 'package:fetchren/src/models/api_request.dart';
-import 'package:fetchren/src/models/http_method.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:fetchren_core/fetchren_core.dart';
+import 'package:test/test.dart';
 
-import '../support/fakes.dart';
+import 'fixtures.dart';
 
 void main() {
   test('generateId returns unique 32-character hex IDs', () {
@@ -23,13 +22,13 @@ void main() {
   });
 
   test('timestamps serialize as UTC ISO-8601', () {
-    final json = makeRequest(createdAt: DateTime.utc(2026, 10, 21, 8, 30))
+    final json = legacyRequest(createdAt: DateTime.utc(2026, 10, 21, 8, 30))
         .toJson();
     expect(json['createdAt'], '2026-10-21T08:30:00.000Z');
   });
 
   test('redactedForStorage keeps non-sensitive data', () {
-    final request = makeRequest(
+    final request = legacyRequest(
       headers: const [
         HeaderEntry(id: '1', name: 'Authorization', value: 'secret'),
         HeaderEntry(id: '2', name: 'Accept', value: '*/*'),
